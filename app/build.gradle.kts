@@ -94,6 +94,11 @@ val releaseKeyPasswordValue = env("NUVIO_RELEASE_KEY_PASSWORD")
     ?: localProperties.getProperty("NUVIO_RELEASE_KEY_PASSWORD", "815787")
 val releaseStorePasswordValue = env("NUVIO_RELEASE_STORE_PASSWORD")
     ?: localProperties.getProperty("NUVIO_RELEASE_STORE_PASSWORD", "815787")
+val versionCodeOverride = env("NUVIO_VERSION_CODE_OVERRIDE")?.toIntOrNull()
+val versionNameOverride = env("NUVIO_VERSION_NAME_OVERRIDE")?.trim()?.takeIf { it.isNotBlank() }
+val updateGitHubOwner = env("NUVIO_UPDATE_GITHUB_OWNER")?.trim()?.takeIf { it.isNotBlank() }
+    ?: "NuvioMedia"
+val personalUpdateBuild = truthy(env("NUVIO_PERSONAL_UPDATE_BUILD"))
 
 android {
     namespace = "com.nuvio.tv"
@@ -104,8 +109,8 @@ android {
         applicationId = "com.nuvio.tv"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1058
-        versionName = "0.9.2-beta"
+        versionCode = versionCodeOverride ?: 1058
+        versionName = versionNameOverride ?: "0.9.2-beta"
 
         buildConfigField("String", "PARENTAL_GUIDE_API_URL", "\"${localProperties.getProperty("PARENTAL_GUIDE_API_URL", "")}\"")
         buildConfigField("String", "INTRODB_API_URL", "\"${localProperties.getProperty("INTRODB_API_URL", "")}\"")
@@ -145,8 +150,9 @@ android {
         buildConfigField("String", "SENTRY_DSN", buildConfigString(sentryDsn))
 
         // In-app updater (GitHub Releases)
-        buildConfigField("String", "GITHUB_OWNER", "\"NuvioMedia\"")
+        buildConfigField("String", "GITHUB_OWNER", buildConfigString(updateGitHubOwner))
         buildConfigField("String", "GITHUB_REPO", "\"NuvioTV\"")
+        buildConfigField("boolean", "PERSONAL_UPDATE_BUILD", personalUpdateBuild.toString())
     }
 
     flavorDimensions += "distribution"

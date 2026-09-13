@@ -1,0 +1,120 @@
+name: Personal Auto-Update APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: personal-auto-update-apk
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build and publish personal APK
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NUVIO_SIGNING_KEY_BASE64: ${{ secrets.NUVIO_SIGNING_KEY_BASE64 }}
+      NUVIO_SIGNING_STORE_PASSWORD: ${{ secrets.NUVIO_SIGNING_STORE_PASSWORD }}
+      NUVIO_SIGNING_KEY_ALIAS: ${{ secrets.NUVIO_SIGNING_KEY_ALIAS }}
+      NUVIO_SIGNING_KEY_PASSWORD: ${{ secrets.NUVIO_SIGNING_KEY_PASSWORD }}
+      LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 }}
+      LOCAL_DEV_PROPERTIES_BASE64: ${{ secrets.LOCAL_DEV_PROPERTIES_BASE64 }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Prepare version and permanent signing
+        id: release
+        run: |
+          if [ -z "$NUVIO_SIGNING_KEY_BASE64" ] || \
+             [ -z "$NUVIO_SIGNING_STORE_PASSWORD" ] || \
+             [ -z "$NUVIO_SIGNING_KEY_ALIAS" ] || \
+             [ -z "$NUVIO_SIGNING_KEY_PASSWORD" ]; then
+            echo "Permanent signing secrets are not configured."
+            exit 1
+          fi
+
+          base_version=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=.*\?:[[:space:]]*"([^"]+)".*$/\1/p' app/build.gradle.kts | head -n 1)
+          base_version_code=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=.*\?:[[:space:]]*([0-9]+).*$/\1/p' app/build.gradle.kts | head -n 1)
+          if [ -z "$base_version" ] || [ -z "$base_version_code" ]; then
+            echo "Could not read the Nuvio version."
+            exit 1
+          fi
+
+          if [[ "$base_version" == *-* ]]; then
+            personal_version="${base_version}.shuffle.${GITHUB_RUN_NUMBER}"
+          else
+            personal_version="${base_version}-shuffle.${GITHUB_RUN_NUMBER}"
+          fi
+          personal_version_code=$((base_version_code * 100000 + GITHUB_RUN_NUMBER))
+          if [ "$personal_version_code" -gt 2100000000 ]; then
+            echo "Generated Android version code is too large."
+            exit 1
+          fi
+
+          if [ -n "$LOCAL_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
+          else
+            touch local.properties
+          fi
+          if [ -n "$LOCAL_DEV_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_DEV_PROPERTIES_BASE64" | base64 --decode > local.dev.properties
+          else
+            touch local.dev.properties
+          fi
+
+          printf '%s' "$NUVIO_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/personal-signing.jks"
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/personal-signing.jks"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$NUVIO_SIGNING_KEY_ALIAS"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$NUVIO_SIGNING_KEY_PASSWORD"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$NUVIO_SIGNING_STORE_PASSWORD"
+            echo "NUVIO_VERSION_NAME_OVERRIDE=$personal_version"
+            echo "NUVIO_VERSION_CODE_OVERRIDE=$personal_version_code"
+            echo "NUVIO_UPDATE_GITHUB_OWNER=mrwestside12"
+            echo "NUVIO_PERSONAL_UPDATE_BUILD=true"
+          } >> "$GITHUB_ENV"
+          {
+            echo "version=$personal_version"
+            echo "version_code=$personal_version_code"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Test updater and build APK
+        run: ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.updater.*' :app:assembleFullDebug --stacktrace
+
+      - name: Prepare universal APK
+        run: |
+          output_name="NuvioTV-${{ steps.release.outputs.version }}-SHUFFLE-CONTINUOUS-PERSONAL-SIGNED.apk"
+          output_path="app/build/outputs/apk/full/debug/$output_name"
+          cp app/build/outputs/apk/full/debug/app-full-universal-debug.apk "$output_path"
+          echo "PERSONAL_APK=$output_path" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: NuvioTV-${{ steps.release.outputs.version }}-personal-signed
+          path: app/build/outputs/apk/full/debug/*-PERSONAL-SIGNED.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish auto-update release
+        env:
+          PERSONAL_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh release create "$PERSONAL_VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "NuvioTV $PERSONAL_VERSION" \
+            --notes "Personal NuvioTV build with continuous episode shuffle and in-app updates from this fork." \
+            --prerelease \
+            "$PERSONAL_APK"

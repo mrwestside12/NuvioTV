@@ -57,7 +57,7 @@ class UpdateViewModel @Inject constructor(
                     updateChannel = channel
                 )
             }
-            if (enabled && !BuildConfig.IS_DEBUG_BUILD) {
+            if (enabled && automaticUpdateChecksEnabled()) {
                 checkForUpdates(force = false, showNoUpdateFeedback = false)
             }
         }
@@ -185,7 +185,7 @@ class UpdateViewModel @Inject constructor(
         }
         viewModelScope.launch {
             updatePreferences.setUpdateBannerEnabled(enabled)
-            if (enabled && changed && !BuildConfig.IS_DEBUG_BUILD) {
+            if (enabled && changed && automaticUpdateChecksEnabled()) {
                 checkForUpdates(force = false, showNoUpdateFeedback = false)
             }
         }
@@ -214,11 +214,14 @@ class UpdateViewModel @Inject constructor(
         }
         viewModelScope.launch {
             updatePreferences.setUpdateChannel(channel)
-            if (!BuildConfig.IS_DEBUG_BUILD) {
+            if (automaticUpdateChecksEnabled()) {
                 checkForUpdates(force = true, showNoUpdateFeedback = false)
             }
         }
     }
+
+    private fun automaticUpdateChecksEnabled(): Boolean =
+        !BuildConfig.IS_DEBUG_BUILD || BuildConfig.PERSONAL_UPDATE_BUILD
 
     fun downloadUpdate() {
         val update = _uiState.value.update ?: return
