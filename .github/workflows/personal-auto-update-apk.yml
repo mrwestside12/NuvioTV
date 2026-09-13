@@ -93,8 +93,15 @@ jobs:
             echo "version_code=$personal_version_code"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Test updater and build APK
-        run: ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' :app:assembleFullRelease --stacktrace
+      - name: Test Shuffle, updater, and build APK
+        run: |
+          ./gradlew \
+            :app:testFullReleaseUnitTest \
+            --tests 'com.nuvio.tv.updater.*' \
+            --tests 'com.nuvio.tv.domain.model.RandomEpisodePickerTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.ShuffleNavigationTest' \
+            :app:assembleFullRelease \
+            --stacktrace
 
       - name: Prepare universal APK
         run: |

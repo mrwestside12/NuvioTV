@@ -1,0 +1,212 @@
+name: Automatic Official Nuvio Sync
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+concurrency:
+  group: automatic-official-nuvio-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-test-and-release:
+    name: Preserve custom build on the latest official release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 }}
+      LOCAL_DEV_PROPERTIES_BASE64: ${{ secrets.LOCAL_DEV_PROPERTIES_BASE64 }}
+      NUVIO_SIGNING_KEY_BASE64: ${{ secrets.NUVIO_SIGNING_KEY_BASE64 }}
+      NUVIO_SIGNING_STORE_PASSWORD: ${{ secrets.NUVIO_SIGNING_STORE_PASSWORD }}
+      NUVIO_SIGNING_KEY_ALIAS: ${{ secrets.NUVIO_SIGNING_KEY_ALIAS }}
+      NUVIO_SIGNING_KEY_PASSWORD: ${{ secrets.NUVIO_SIGNING_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout personal dev branch
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Find a new official release
+        id: release
+        run: |
+          set -euo pipefail
+          latest_release=$(gh api repos/NuvioMedia/NuvioTV/releases/latest --jq .tag_name)
+          if [[ ! "$latest_release" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Unexpected upstream release tag: $latest_release"
+            exit 1
+          fi
+
+          current_release=$(tr -d '[:space:]' < .github/personal-updater/upstream-release.txt)
+          echo "tag=$latest_release" >> "$GITHUB_OUTPUT"
+          if [ "$latest_release" = "$current_release" ]; then
+            echo "update_found=false" >> "$GITHUB_OUTPUT"
+            echo "Official NuvioTV $latest_release is already integrated." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "update_found=true" >> "$GITHUB_OUTPUT"
+            echo "Preparing official NuvioTV $latest_release." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Merge the official release without publishing
+        if: steps.release.outputs.update_found == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add official https://github.com/NuvioMedia/NuvioTV.git
+          git fetch --force --no-tags official "refs/tags/$UPSTREAM_TAG:refs/tags/automatic-upstream-release"
+          git merge --no-ff --no-commit refs/tags/automatic-upstream-release
+
+      - name: Confirm personal features survived the merge
+        if: steps.release.outputs.update_found == 'true'
+        run: |
+          set -euo pipefail
+          test -f app/src/main/java/com/nuvio/tv/domain/model/RandomEpisodePicker.kt
+          test -f app/src/test/java/com/nuvio/tv/domain/model/RandomEpisodePickerTest.kt
+          test -f app/src/test/java/com/nuvio/tv/ui/screens/player/ShuffleNavigationTest.kt
+          grep -q 'SHUFFLE_MODE' app/src/main/java/com/nuvio/tv/ui/navigation/Screen.kt
+          grep -q 'NUVIO_UPDATE_GITHUB_OWNER' app/build.gradle.kts
+          grep -q 'NUVIO_PERSONAL_UPDATE_BUILD' app/build.gradle.kts
+
+      - name: Set up Java
+        if: steps.release.outputs.update_found == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Restore and verify official service configuration
+        if: steps.release.outputs.update_found == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$LOCAL_PROPERTIES_BASE64" ]; then
+            echo "Official service configuration is not configured."
+            exit 1
+          fi
+          printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
+          if [ -n "$LOCAL_DEV_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_DEV_PROPERTIES_BASE64" | base64 --decode > local.dev.properties
+          else
+            touch local.dev.properties
+          fi
+          sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE|NUVIO_RELEASE_KEY_ALIAS|NUVIO_RELEASE_KEY_PASSWORD|NUVIO_RELEASE_STORE_PASSWORD)[[:space:]]*=/d' local.properties
+
+          mkdir -p "$RUNNER_TEMP/official-apk" "$RUNNER_TEMP/official-dex"
+          gh release download "$UPSTREAM_TAG" \
+            --repo NuvioMedia/NuvioTV \
+            --pattern 'app-full-universal-release.apk' \
+            --dir "$RUNNER_TEMP/official-apk"
+          unzip -q -j "$RUNNER_TEMP/official-apk/app-full-universal-release.apk" \
+            'classes*.dex' -d "$RUNNER_TEMP/official-dex"
+
+          service_keys=(
+            NUVIO_SUPABASE_URL
+            NUVIO_SUPABASE_ANON_KEY
+            TV_LOGIN_WEB_BASE_URL
+            TRAKT_CLIENT_ID
+            TRAKT_CLIENT_SECRET
+            TRAKT_REDIRECT_URI
+            SIMKL_CLIENT_ID
+            SIMKL_APP_NAME
+            TMDB_API_KEY
+            INTRODB_API_URL
+            TRAILER_API_URL
+            IMDB_RATINGS_API_BASE_URL
+            IMDB_TAPFRAME_API_BASE_URL
+            AVATAR_PUBLIC_BASE_URL
+            UNIQUE_CONTRIBUTIONS_BASE_URL
+            SUPPORTERS_API_BASE_URL
+            SUPPORT_URL
+            PLAYBACK_REPORTS_BASE_URL
+            DEVICE_LOGIN_WEB_BASE_URL
+          )
+          for key in "${service_keys[@]}"; do
+            value=$(sed -n "s/^${key}=//p" local.properties | head -n 1)
+            if [ -z "$value" ]; then
+              echo "Required service setting $key is empty."
+              exit 1
+            fi
+            if ! grep -aFq -- "$value" "$RUNNER_TEMP"/official-dex/classes*.dex; then
+              echo "Saved service setting $key no longer matches the official APK."
+              echo "The update was stopped before changing the fork or publishing an APK."
+              exit 1
+            fi
+          done
+
+      - name: Prepare permanent signing for verification build
+        if: steps.release.outputs.update_found == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "$NUVIO_SIGNING_KEY_BASE64" ] || \
+             [ -z "$NUVIO_SIGNING_STORE_PASSWORD" ] || \
+             [ -z "$NUVIO_SIGNING_KEY_ALIAS" ] || \
+             [ -z "$NUVIO_SIGNING_KEY_PASSWORD" ]; then
+            echo "Permanent signing secrets are not configured."
+            exit 1
+          fi
+          printf '%s' "$NUVIO_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/personal-signing.jks"
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/personal-signing.jks"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$NUVIO_SIGNING_KEY_ALIAS"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$NUVIO_SIGNING_KEY_PASSWORD"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$NUVIO_SIGNING_STORE_PASSWORD"
+            echo "NUVIO_UPDATE_GITHUB_OWNER=mrwestside12"
+            echo "NUVIO_PERSONAL_UPDATE_BUILD=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Test Shuffle, updater, and full release build
+        if: steps.release.outputs.update_found == 'true'
+        run: |
+          ./gradlew \
+            :app:testFullReleaseUnitTest \
+            --tests 'com.nuvio.tv.updater.*' \
+            --tests 'com.nuvio.tv.domain.model.RandomEpisodePickerTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.ShuffleNavigationTest' \
+            :app:assembleFullRelease \
+            --stacktrace
+
+      - name: Save the verified upstream update
+        if: steps.release.outputs.update_found == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$UPSTREAM_TAG" > .github/personal-updater/upstream-release.txt
+          git add .github/personal-updater/upstream-release.txt
+          git commit -m "chore: sync official NuvioTV $UPSTREAM_TAG"
+          git push origin HEAD:dev
+
+      - name: Publish the verified personal update
+        if: steps.release.outputs.update_found == 'true'
+        run: |
+          gh workflow run personal-auto-update-apk.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref dev
+          echo "The permanent-signing release build has been started." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report a safely stopped update
+        if: failure() && steps.release.outputs.update_found == 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          title="Automatic Nuvio update needs attention"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number // empty' || true)
+          if [ -z "$existing" ]; then
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body "Official NuvioTV $UPSTREAM_TAG could not be merged, verified, or built automatically. Your current working APK and dev branch were left unchanged. Open the failed Actions run for details." || true
+          fi
+          echo "The update stopped safely. The existing release and dev branch were not replaced." >> "$GITHUB_STEP_SUMMARY"
