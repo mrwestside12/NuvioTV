@@ -46,24 +46,28 @@ jobs:
             touch local.dev.properties
           fi
 
-      - name: Prepare CI signing config
+      - name: Prepare permanent signing config
+        env:
+          NUVIO_SIGNING_KEY_BASE64: ${{ secrets.NUVIO_SIGNING_KEY_BASE64 }}
+          NUVIO_SIGNING_STORE_PASSWORD: ${{ secrets.NUVIO_SIGNING_STORE_PASSWORD }}
+          NUVIO_SIGNING_KEY_ALIAS: ${{ secrets.NUVIO_SIGNING_KEY_ALIAS }}
+          NUVIO_SIGNING_KEY_PASSWORD: ${{ secrets.NUVIO_SIGNING_KEY_PASSWORD }}
         run: |
-          keytool -genkeypair \
-            -v \
-            -keystore "$RUNNER_TEMP/ci-debug.jks" \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US" \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000
+          if [ -z "$NUVIO_SIGNING_KEY_BASE64" ] || \
+             [ -z "$NUVIO_SIGNING_STORE_PASSWORD" ] || \
+             [ -z "$NUVIO_SIGNING_KEY_ALIAS" ] || \
+             [ -z "$NUVIO_SIGNING_KEY_PASSWORD" ]; then
+            echo "Permanent signing secrets are not configured."
+            exit 1
+          fi
+
+          printf '%s' "$NUVIO_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/personal-signing.jks"
 
           {
-            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/ci-debug.jks"
-            echo "NUVIO_RELEASE_KEY_ALIAS=androiddebugkey"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=android"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=android"
+            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/personal-signing.jks"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$NUVIO_SIGNING_KEY_ALIAS"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$NUVIO_SIGNING_KEY_PASSWORD"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$NUVIO_SIGNING_STORE_PASSWORD"
           } >> "$GITHUB_ENV"
 
       - name: Test updater and build fullDebug APK
