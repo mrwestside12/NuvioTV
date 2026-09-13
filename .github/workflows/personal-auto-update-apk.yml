@@ -66,13 +66,16 @@ jobs:
           if [ -n "$LOCAL_PROPERTIES_BASE64" ]; then
             printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
           else
-            touch local.properties
+            echo "Official service configuration is not configured."
+            exit 1
           fi
           if [ -n "$LOCAL_DEV_PROPERTIES_BASE64" ]; then
             printf '%s' "$LOCAL_DEV_PROPERTIES_BASE64" | base64 --decode > local.dev.properties
           else
             touch local.dev.properties
           fi
+
+          sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE|NUVIO_RELEASE_KEY_ALIAS|NUVIO_RELEASE_KEY_PASSWORD|NUVIO_RELEASE_STORE_PASSWORD)[[:space:]]*=/d' local.properties
 
           printf '%s' "$NUVIO_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/personal-signing.jks"
           {
@@ -91,20 +94,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Test updater and build APK
-        run: ./gradlew :app:testFullDebugUnitTest --tests 'com.nuvio.tv.updater.*' :app:assembleFullDebug --stacktrace
+        run: ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' :app:assembleFullRelease --stacktrace
 
       - name: Prepare universal APK
         run: |
           output_name="NuvioTV-${{ steps.release.outputs.version }}-SHUFFLE-CONTINUOUS-PERSONAL-SIGNED.apk"
-          output_path="app/build/outputs/apk/full/debug/$output_name"
-          cp app/build/outputs/apk/full/debug/app-full-universal-debug.apk "$output_path"
+          output_path="app/build/outputs/apk/full/release/$output_name"
+          cp app/build/outputs/apk/full/release/app-full-universal-release.apk "$output_path"
           echo "PERSONAL_APK=$output_path" >> "$GITHUB_ENV"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v6
         with:
           name: NuvioTV-${{ steps.release.outputs.version }}-personal-signed
-          path: app/build/outputs/apk/full/debug/*-PERSONAL-SIGNED.apk
+          path: app/build/outputs/apk/full/release/*-PERSONAL-SIGNED.apk
           if-no-files-found: error
           retention-days: 30
 
