@@ -108,13 +108,14 @@ jobs:
           output_name="NuvioTV-${{ steps.release.outputs.version }}-SHUFFLE-CONTINUOUS-PERSONAL-SIGNED.apk"
           output_path="app/build/outputs/apk/full/release/$output_name"
           cp app/build/outputs/apk/full/release/app-full-universal-release.apk "$output_path"
+          test -f "$output_path"
           echo "PERSONAL_APK=$output_path" >> "$GITHUB_ENV"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v6
         with:
           name: NuvioTV-${{ steps.release.outputs.version }}-personal-signed
-          path: app/build/outputs/apk/full/release/*-PERSONAL-SIGNED.apk
+          path: ${{ env.PERSONAL_APK }}
           if-no-files-found: error
           retention-days: 30
 
