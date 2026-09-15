@@ -73,7 +73,7 @@ jobs:
           test -f app/src/main/java/com/nuvio/tv/domain/model/RandomEpisodePicker.kt
           test -f app/src/test/java/com/nuvio/tv/domain/model/RandomEpisodePickerTest.kt
           test -f app/src/test/java/com/nuvio/tv/ui/screens/player/ShuffleNavigationTest.kt
-          grep -q 'SHUFFLE_MODE' app/src/main/java/com/nuvio/tv/ui/navigation/Screen.kt
+          grep -q 'shuffleSession' app/src/main/java/com/nuvio/tv/ui/navigation/Screen.kt
           grep -q 'NUVIO_UPDATE_GITHUB_OWNER' app/build.gradle.kts
           grep -q 'NUVIO_PERSONAL_UPDATE_BUILD' app/build.gradle.kts
 
